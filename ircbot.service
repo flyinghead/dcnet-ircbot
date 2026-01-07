@@ -1,0 +1,15 @@
+[Unit]
+Description=unreal IRC bot
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=dcnet
+ExecStart=/usr/local/sbin/ircbot 172.20.0.1
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
