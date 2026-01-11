@@ -1,7 +1,9 @@
 #
-# needs libircclient-dev
+# dependencies: libircclient-dev libdcserver
 #
-INSTALL_DIR = /usr/local/sbin
+prefix = /usr/local
+exec_prefix = $(prefix)
+sbindir = $(exec_prefix)/sbin
 
 all: ircbot
 
@@ -9,7 +11,8 @@ ircbot: ircbot.cpp
 	c++ -std=c++17 -O3 -g ircbot.cpp -o ircbot -lircclient -ldcserver -Wl,-rpath,/usr/local/lib
 
 install: all
-	install ircbot $(INSTALL_DIR)
+	mkdir -p $(DESTDIR)$(sbindir)
+	install ircbot $(DESTDIR)$(sbindir)
 
 installservice:
 	cp ircbot.service /usr/lib/systemd/system/

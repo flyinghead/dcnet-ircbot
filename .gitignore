@@ -1,2 +1,5 @@
 /ircbot
 /*.o
+/.cproject
+/.project
+/.gdb_history

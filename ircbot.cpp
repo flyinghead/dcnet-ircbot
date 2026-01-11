@@ -23,9 +23,14 @@
 #include <iterator>
 #include <cstring>
 #include <dcserver/discord.hpp>
+#include <dcserver/status.hpp>
 #include <map>
 #include <vector>
 #include <set>
+#include <thread>
+#include <mutex>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 const char *BOT_NAME = "DCNetBot";
 
@@ -78,6 +83,10 @@ std::string curTopics[std::size(Channels)];
 
 unsigned joinIndex;
 unsigned topicIndex;
+
+// protects collections below so that the status updater thread can read their size safely
+std::mutex mutex;
+using Lock = std::unique_lock<std::mutex>;
 
 // Worms World Party
 std::map<std::string, std::string> wwpPlayers;
@@ -167,12 +176,20 @@ static void playerJoined(const char *nick, const char *channel)
 			++starlancerPlayerCount;
 			discordStarlancerPlayerJoined();
 		}
-		else if (!strcmp(TET_CHAN, channel)) {
-			tetrisPlayers.insert(nick);
+		else if (!strcmp(TET_CHAN, channel))
+		{
+			{
+				Lock _(mutex);
+				tetrisPlayers.insert(nick);
+			}
 			discordTetrisPlayerJoined(nick);
 		}
-		else {
-			wwpPlayers[nick] = channel;
+		else
+		{
+			{
+				Lock _(mutex);
+				wwpPlayers[nick] = channel;
+			}
 			discordWwpPlayerJoined(nick, channel + 1);
 		}
 	} catch (const DiscordException& e) {
@@ -182,6 +199,7 @@ static void playerJoined(const char *nick, const char *channel)
 
 static void playerParted(const char *nick, const char *channel)
 {
+	Lock _(mutex);
 	if (!strcmp(STAR_CHAN, channel)) {
 		starlancerPlayerCount = std::max(0, starlancerPlayerCount - 1);
 	}
@@ -224,9 +242,12 @@ static void playerMessage(const char *nick, const char *channel, const char *msg
 			{
 				Game game { gameId, creator, channel + 1 };
 				game.players.push_back(creator);
-				wwpGames[gameId] = game;
+				{
+					Lock _(mutex);
+					wwpGames[gameId] = game;
+				}
 				discordCreateWwpGame(game);
-				fprintf(stderr, "%s created a game in %s\n", nick, channel);
+				//fprintf(stderr, "%s created a game in %s\n", nick, channel);
 			}
 			else
 			{
@@ -235,7 +256,7 @@ static void playerMessage(const char *nick, const char *channel, const char *msg
 				{
 					it->second.players.push_back(nick);
 					discordJoinWwpGame(it->second, nick);
-					fprintf(stderr, "%s joined %s's game\n", nick, it->second.creator.c_str());
+					//fprintf(stderr, "%s joined %s's game\n", nick, it->second.creator.c_str());
 				}
 			}
 		}
@@ -250,9 +271,11 @@ static void playerMessage(const char *nick, const char *channel, const char *msg
 				return;
 			std::string creator{ msg + 3, bang };
 			std::string gameId{ bang + 1, end };
-			if (creator == nick) {
+			if (creator == nick)
+			{
+				Lock _(mutex);
 				wwpGames.erase(gameId);
-				fprintf(stderr, "Game %s deleted\n", gameId.c_str());
+				//fprintf(stderr, "Game %s deleted\n", gameId.c_str());
 			}
 			else
 			{
@@ -264,7 +287,7 @@ static void playerMessage(const char *nick, const char *channel, const char *msg
 				{
 					if (*it2 == nick) {
 						players.erase(it2);
-						fprintf(stderr, "%s left %s's game\n", nick, it->second.creator.c_str());
+						//fprintf(stderr, "%s left %s's game\n", nick, it->second.creator.c_str());
 						break;
 					}
 				}
@@ -346,7 +369,7 @@ void event_part(irc_session_t *session, const char *event, const char *origin, c
 {
 	if (origin == nullptr || count == 0)
 		return;
-	fprintf(stderr, "User %s left %s\n", origin, params[0]);
+	//fprintf(stderr, "User %s left %s\n", origin, params[0]);
 	playerParted(origin, params[0]);
 }
 
@@ -355,7 +378,7 @@ void event_channel(irc_session_t *session, const char *event, const char *origin
 	if (origin == nullptr || count < 2)
 		return;
 	const char *msg = params[1];
-	fprintf(stderr, "%s say: %s\n", origin, msg);
+	//fprintf(stderr, "%s say: %s\n", origin, msg);
 	playerMessage(origin, params[0], params[1]);
 }
 
@@ -380,6 +403,72 @@ void event_topic(irc_session_t *session, const char *event, const char *origin, 
 	}
 }
 
+static bool pingMsxAlpha()
+{
+	int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (sock < 0) {
+		perror("socket");
+		return false;
+	}
+	sockaddr_in addr {};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = 0x0100007f;
+	addr.sin_port = htons(28900);
+	if (connect(sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("Connection to msx_alpha failed");
+		close(sock);
+		return false;
+	}
+	char buffer[256];
+	ssize_t size = read(sock, buffer, sizeof(buffer));
+	if (size < 0) {
+		perror("Receive from msx_alpha failed");
+	}
+	else if (size == 0) {
+		fprintf(stderr, "msx_alpha closed the connexion\n");
+	}
+	bool status = false;
+	if (size > 0) {
+		if (!strncmp(buffer, "\\basic\\\\secure\\", 15))
+			status = true;
+	}
+	shutdown(sock, SHUT_WR);
+	close(sock);
+	return status;
+}
+
+static void statusUpdater()
+{
+	for (;;)
+	{
+		int wwpPlayers, wwpGames;
+		int tetrisPlayers;
+		{
+			Lock _(mutex);
+			wwpPlayers = ::wwpPlayers.size();
+			wwpGames = ::wwpGames.size();
+			tetrisPlayers = ::tetrisPlayers.size();
+		}
+		statusUpdate("wwp", wwpPlayers, wwpGames);
+		statusUpdate("nexttetris", tetrisPlayers, 0);
+		try {
+			statusCommit("ircbot");
+		} catch (const std::exception& e) {
+			fprintf(stderr, "statusCommit(ircbot) failed: %s\n", e.what());
+		}
+		if (pingMsxAlpha()) {
+			statusUpdate("starlancer", starlancerPlayerCount, 0);
+			try {
+				statusCommit("starlancer");
+			} catch (const std::exception& e) {
+				fprintf(stderr, "statusCommit(starlancer) failed: %s\n", e.what());
+			}
+		}
+
+		sleep((unsigned)statusGetInterval());
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	// The IRC callbacks structure
@@ -394,6 +483,9 @@ int main(int argc, char *argv[])
 	callbacks.event_topic = event_topic;
 	callbacks.event_part = event_part;
 	callbacks.event_channel = event_channel;
+
+	std::thread statusThread(statusUpdater);
+	statusThread.detach();
 
 	while (true)
 	{
