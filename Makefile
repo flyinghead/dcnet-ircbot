@@ -8,7 +8,7 @@ sbindir = $(exec_prefix)/sbin
 all: ircbot
 
 ircbot: ircbot.cpp
-	c++ -std=c++17 -O3 -g ircbot.cpp -o ircbot -lircclient -ldcserver -Wl,-rpath,/usr/local/lib
+	c++ -std=c++17 -O3 -g ircbot.cpp -o ircbot -lircclient -lpthread -ldcserver -Wl,-rpath,/usr/local/lib
 
 install: all
 	mkdir -p $(DESTDIR)$(sbindir)
