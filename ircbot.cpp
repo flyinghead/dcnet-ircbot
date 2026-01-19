@@ -99,7 +99,7 @@ struct Game
 };
 std::map<std::string, Game> wwpGames;
 // StarLancer
-int starlancerPlayerCount;
+std::set<std::string> starlancerPlayers;
 // Next tetris
 std::set<std::string> tetrisPlayers;
 
@@ -161,19 +161,32 @@ static void discordStarlancerPlayerJoined()
 	Notif notif;
 	notif.content = "A new player has connected";
 	notif.embed.title = "Players";
-	notif.embed.text = std::to_string(starlancerPlayerCount);
-	if (starlancerPlayerCount >= 2)
+	notif.embed.text = std::to_string(starlancerPlayers.size());
+	if (starlancerPlayers.size() >= 2)
 		notif.embed.text += " players are online";
 	else
 		notif.embed.text += " player is online";
 	discordNotif("starlancer", notif);
 }
 
+static void resetStats()
+{
+	Lock _(mutex);
+	starlancerPlayers.clear();
+	tetrisPlayers.clear();
+	wwpPlayers.clear();
+	wwpGames.clear();
+}
+
 static void playerJoined(const char *nick, const char *channel)
 {
 	try {
-		if (!strcmp(STAR_CHAN, channel)) {
-			++starlancerPlayerCount;
+		if (!strcmp(STAR_CHAN, channel))
+		{
+			{
+				Lock _(mutex);
+				starlancerPlayers.insert(nick);
+			}
 			discordStarlancerPlayerJoined();
 		}
 		else if (!strcmp(TET_CHAN, channel))
@@ -200,15 +213,11 @@ static void playerJoined(const char *nick, const char *channel)
 static void playerParted(const char *nick, const char *channel)
 {
 	Lock _(mutex);
-	if (!strcmp(STAR_CHAN, channel)) {
-		starlancerPlayerCount = std::max(0, starlancerPlayerCount - 1);
-	}
-	else if (!strcmp(TET_CHAN, channel)) {
+	if (channel == nullptr || !strcmp(STAR_CHAN, channel))
+		starlancerPlayers.erase(nick);
+	if (channel == nullptr || !strcmp(TET_CHAN, channel))
 		tetrisPlayers.erase(nick);
-	}
-	else {
-		wwpPlayers.erase(nick);
-	}
+	wwpPlayers.erase(nick);
 }
 
 static void playerMessage(const char *nick, const char *channel, const char *msg)
@@ -403,6 +412,12 @@ void event_topic(irc_session_t *session, const char *event, const char *origin, 
 	}
 }
 
+void event_quit(irc_session_t *session, const char *event, const char *origin, const char **params, unsigned count)
+{
+	//fprintf(stderr, "%s has left\n", origin);
+	playerParted(origin, nullptr);
+}
+
 static bool pingMsxAlpha()
 {
 	int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -443,11 +458,13 @@ static void statusUpdater()
 	{
 		int wwpPlayers, wwpGames;
 		int tetrisPlayers;
+		int starlancerPlayers;
 		{
 			Lock _(mutex);
 			wwpPlayers = ::wwpPlayers.size();
 			wwpGames = ::wwpGames.size();
 			tetrisPlayers = ::tetrisPlayers.size();
+			starlancerPlayers = ::starlancerPlayers.size();
 		}
 		statusUpdate("wwp", wwpPlayers, wwpGames);
 		statusUpdate("nexttetris", tetrisPlayers, 0);
@@ -457,7 +474,7 @@ static void statusUpdater()
 			fprintf(stderr, "statusCommit(ircbot) failed: %s\n", e.what());
 		}
 		if (pingMsxAlpha()) {
-			statusUpdate("starlancer", starlancerPlayerCount, 0);
+			statusUpdate("starlancer", starlancerPlayers, 0);
 			try {
 				statusCommit("starlancer");
 			} catch (const std::exception& e) {
@@ -483,6 +500,7 @@ int main(int argc, char *argv[])
 	callbacks.event_topic = event_topic;
 	callbacks.event_part = event_part;
 	callbacks.event_channel = event_channel;
+	callbacks.event_quit = event_quit;
 
 	std::thread statusThread(statusUpdater);
 	statusThread.detach();
@@ -511,6 +529,7 @@ int main(int argc, char *argv[])
 			sleep(30);
 		}
 		irc_destroy_session(session);
+		resetStats();
 	}
 
 	return 0;
