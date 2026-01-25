@@ -467,14 +467,14 @@ static void statusUpdater()
 			starlancerPlayers = ::starlancerPlayers.size();
 		}
 		statusUpdate("wwp", wwpPlayers, wwpGames);
-		statusUpdate("nexttetris", tetrisPlayers, 0);
+		statusUpdate("nexttetris", tetrisPlayers, -1);
 		try {
 			statusCommit("ircbot");
 		} catch (const std::exception& e) {
 			fprintf(stderr, "statusCommit(ircbot) failed: %s\n", e.what());
 		}
 		if (pingMsxAlpha()) {
-			statusUpdate("starlancer", starlancerPlayers, 0);
+			statusUpdate("starlancer", starlancerPlayers, -1);
 			try {
 				statusCommit("starlancer");
 			} catch (const std::exception& e) {
